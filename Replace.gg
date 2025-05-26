@@ -2385,7 +2385,9 @@ local function CalculateBounds(TableOfObjects)
 	local TableOfObjects = typeof(TableOfObjects) == "table" and TableOfObjects or {};
 	local Y = 0;
 	for _, Object in next, TableOfObjects do
-		Y += Object.AbsoluteSize.Y;
+		if Object and Object.AbsoluteSize then -- Added safety check
+			Y += Object.AbsoluteSize.Y;
+		end
 	end
 	return Y;
 end
@@ -2394,16 +2396,16 @@ local function UpdateNotifications()
 	local DeltaTime = rs.Heartbeat:Wait(); -- Use Heartbeat for updates
 	local PreviousObjects = {};
 
-	-- Filter out nil objects (removed notifications)
+	-- Filter out nil objects (removed notifications) and objects without a parent
 	for i = #InstructionObjects, 1, -1 do
-		if not InstructionObjects[i][1] then
+		if not InstructionObjects[i][1] or not InstructionObjects[i][1].Parent then
 			table.remove(InstructionObjects, i)
 		end
 	end
 
 	for _, Object in next, InstructionObjects do
 		local Label, Delta, Done = Object[1], Object[2], Object[3];
-		if not Label or not Label.Parent then continue end -- Skip if object is removed
+		if not Label or not Label.Parent then continue end -- Double check if object is removed
 
 		if (not Done) then
 			if (Delta < NotificationTweenTime) then
@@ -2415,39 +2417,62 @@ local function UpdateNotifications()
 		end
 
 		local NewValue = tws:GetValue(Delta, NotificationTweenStyle, NotificationTweenDirection); -- Use library tws and notification tweening vars
-		local CurrentPos = Label.Position;
+		-- local CurrentPos = Label.Position; -- Not needed for calculation
 		local PreviousBoundsY = CalculateBounds(PreviousObjects); -- Only need Y
 		-- Position notifications from the top, stacking down
 		local TargetPosY = PreviousBoundsY + (NotificationPadding * #PreviousObjects);
 		-- Animate X position from outside to inside the container
-		local TargetPosX = 0;
-		local AnimatedPosX = -Label.Size.X.Offset * (1 - NewValue); -- Animate from left outside, Corrected NewLabel to Label
+		-- Ensure Label.Size.X.Offset is accessible before using it
+		local AnimatedPosX = 0;
+		if Label and Label.Size and Label.Size.X and Label.Size.X.Offset then -- Added comprehensive safety check
+			AnimatedPosX = -Label.Size.X.Offset * (1 - NewValue); -- Animate from left outside
+		end
 
-		Label.Position = UDim2.new(0, AnimatedPosX, 0, TargetPosY); -- Update position
+		-- Only update position if the object is still valid
+		if Label and Label.Parent then -- Added safety check before updating position
+			Label.Position = UDim2.new(0, AnimatedPosX, 0, TargetPosY); -- Update position
+		end
 
-		table.insert(PreviousObjects, Label); -- Insert after calculating position
+		-- Only add to PreviousObjects if the object is still valid
+		if Label and Label.Parent then -- Added safety check before adding to PreviousObjects
+			table.insert(PreviousObjects, Label); -- Insert after calculating position
+		end
 	end
 	-- No need to cache all objects, only need previous for positioning	
 
-	-- Remove finished tweens (optional, depends on how often list is cleaned)
-	-- for i = #InstructionObjects, 1, -1 do
-	--	if InstructionObjects[i][3] and InstructionObjects[i][2] >= NotificationTweenTime then
-	--		table.remove(InstructionObjects, i)
-	--	end
-	-- end
+	-- Note: Automatic removal of finished tweens is handled by FadeOutAfter destroying the object
 
-	LastTick = tick(); -- Update last tick
+	-- LastTick = tick(); -- Update last tick - Heartbeat:Wait() handles timing
 end
 
 -- Use Heartbeat for smoother updates independent of rendering frequency changes
 rs.Heartbeat:Connect(UpdateNotifications); -- Use Heartbeat and Connect
 
 local function FadeProperty(Object, transparencyProperty, duration, easingStyle, easingDirection, callback)
+	if not Object or not Object.Parent then return end -- Safety check
 	local propTable = { [transparencyProperty] = 1 };
-	tws:Create(Object, TweenInfo.new(duration, easingStyle, easingDirection), propTable):Play();
+	local tween = tws:Create(Object, TweenInfo.new(duration, easingStyle, easingDirection), propTable);
+	tween:Play();
 
 	if callback then
-		tws:Create(Object, TweenInfo.new(duration, easingStyle, easingDirection), propTable).Completed:Connect(callback);
+		-- Disconnect the connection if the object is destroyed before completion
+		local connection;
+		connection = tween.Completed:Connect(function(...)
+			if Object and Object.Parent then -- Check if object still exists before calling callback
+				callback(...);
+			end
+			if connection then connection:Disconnect() end -- Disconnect after execution
+		end);
+
+		-- Optional: Disconnect connection if the object is destroyed manually
+		-- if Object:IsA("GuiObject") then -- Only for GuiObjects
+		--	utility:CreateConnection(Object.AncestryChanged, function() -- Assuming utility has CreateConnection
+		--		if not Object.Parent and connection then
+		--			connection:Disconnect();
+		--			connection = nil;
+		--		end
+		--	end);
+		-- end
 	end
 end
 
@@ -2458,6 +2483,7 @@ local function FadeOutAfter(Object, Seconds)
 
 	-- Fade out the main notification frame
 	FadeProperty(Object, "BackgroundTransparency", NotificationFadeDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, function()
+		-- Object is destroyed in this callback, no need to remove from InstructionObjects explicitly here
 		if Object and Object.Parent then Object:Destroy() end -- Destroy after fading
 	end);
 
@@ -2485,7 +2511,113 @@ local function FadeOutAfter(Object, Seconds)
 	end
 end
 
--- Combined CreateWindow function
+-- Function to create individual notifications
+function library:Notify(Properties)
+	local Properties = typeof(Properties) == "table" and Properties or {};
+	local Title = Properties.Title;
+	local Description = Properties.Description;
+	local Duration = Properties.Duration or 5;
+	local Width = Properties.Width or 300; -- Allow specifying width
+
+	if (Title) or (Description) then -- Check that user has provided title and/or description
+
+		-- Create main notification frame (outline style)
+		local NewLabel = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(40, 40, 40), -- Similar to section background
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(12, 12, 12), -- Similar to section border
+			BorderMode = "Inset",
+			BorderSizePixel = 1,
+			Size = UDim2.new(0, Width, 0, 0), -- Initial height will be calculated
+			Position = UDim2.new(0, -Width, 0, 0), -- Start off-screen to the left
+			ZIndex = 5, -- Ensure it's above main UI but below popups
+			-- Parent = NotificationContainer, -- Will be parented later if container exists
+			ClipsDescendants = true -- Clip content outside bounds
+		});
+
+		-- Add inner frame (darker background)
+		local InnerFrame = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(23, 23, 23), -- Similar to section inner background
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Position = UDim2.new(0, 1, 0, 1),
+			Size = UDim2.new(1, -2, 1, -2),
+			Parent = NewLabel,
+			ZIndex = 6
+		});
+
+		local ContentHeight = 0;
+		local Padding = 8; -- Inner padding
+
+		if (Title) then
+			local TitleLabel = utility:RenderObject("TextLabel", {
+				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+				BackgroundTransparency = 1,
+				BorderColor3 = Color3.fromRGB(0, 0, 0),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0, Padding, 0, Padding),
+				Size = UDim2.new(1, -Padding * 2, 0, 14), -- Fixed height for title
+				ZIndex = 7,
+				Font = "Code", -- Use library font
+				RichText = true,
+				Text = "<b>" .. Title .. "</b>", -- Bold title
+				TextColor3 = Color3.fromRGB(205, 205, 205), -- Use library text color
+				TextSize = 11, -- Use library text size
+				TextStrokeTransparency = 1,
+				TextXAlignment = "Left",
+				TextYAlignment = "Top",
+				Parent = InnerFrame
+			});
+			ContentHeight += 14 + Padding; -- Add title height and padding
+		end
+
+		if (Description) then
+			-- Calculate description height based on text size and wrapping
+			local TextSize = ts:GetTextSize(Description, 9, Enum.Font.Code, Vector2.new(Width - Padding * 2, 0));
+			local DescriptionHeight = TextSize.Y;
+
+			local DescriptionLabel = utility:RenderObject("TextLabel", {
+				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+				BackgroundTransparency = 1,
+				BorderColor3 = Color3.fromRGB(0, 0, 0),
+				BorderSizePixel = 0,
+				Position = UDim2.new(0, Padding, 0, ContentHeight), -- Position below title if exists
+				Size = UDim2.new(1, -Padding * 2, 0, DescriptionHeight), -- Dynamic height
+				ZIndex = 7,
+				Font = "Code", -- Use library font
+				RichText = true,
+				Text = Description,
+				TextColor3 = Color3.fromRGB(155, 155, 155), -- Slightly darker text color
+				TextSize = 9, -- Use library text size
+				TextStrokeTransparency = 1,
+				TextXAlignment = "Left",
+				TextYAlignment = "Top",
+				TextWrapped = true, -- Enable text wrapping
+				Parent = InnerFrame
+			});
+			ContentHeight += DescriptionHeight + Padding; -- Add description height and padding
+		end
+
+		-- Adjust the size of the main frame based on content
+		NewLabel.Size = UDim2.new(0, Width, 0, ContentHeight + Padding); -- Add bottom padding
+
+		-- Add the notification to the container (will be set up in CreateWindow)
+		-- This ensures NotificationsContainer exists before parenting
+		if NotificationContainer and NotificationContainer.Parent then -- Added parent check
+			NewLabel.Parent = NotificationContainer;
+			-- Add to the instruction list for animation
+			table.insert(InstructionObjects, {NewLabel, 0, false});
+			-- Start the fade out coroutine
+			coroutine.wrap(FadeOutAfter)(NewLabel, Duration);
+		else
+			warn("NotificationContainer is not initialized or parented correctly. Call CreateWindow first.")
+			NewLabel:Destroy() -- Clean up if container not ready
+		end
+	end
+end
+
+-- Function to create the main window and notification container
 function library:CreateWindow(Properties)
 	Properties = Properties or {}
 	--
@@ -2611,103 +2743,114 @@ function library:CreateWindow(Properties)
 			BorderColor3 = Color3.fromRGB(0, 0, 0),
 			BorderSizePixel = 0,
 			Parent = InnerFrame_Pages_InnerBorder,
-			Size = UDim2.new(1, -2, 1, -2),
-			Parent = NewLabel,
-			ZIndex = 6
+			Position = UDim2.new(0, 1, 0, 0),
+			Size = UDim2.new(1, -1, 1, 0)
+		})
+		-- //
+		local InnerBorder_InnerFrame_Folder = utility:RenderObject("Folder", {
+			Parent = Pages_InnerBorder_InnerFrame
+		})
+		--
+		local InnerBorder_InnerFrame_Pattern = utility:RenderObject("ImageLabel", {
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 1,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = Pages_InnerBorder_InnerFrame,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(1, 0, 1, 0),
+			Image = "rbxassetid://8547666218",
+			ImageColor3 = Color3.fromRGB(12, 12, 12),
+			ScaleType = "Tile",
+			TileSize = UDim2.new(0, 8, 0, 8)
+		})
+
+		-- Create the NotificationContainer and parent it to this ScreenGui
+		NotificationContainer = utility:RenderObject("Frame", {
+			Name = "NotificationsContainer",
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 1,
+			Size = UDim2.new(0, 300, 1, 0), -- Example size, can adjust
+			-- Position in the top right corner, slightly offset
+			Position = UDim2.new(1, -320, 0, 20), -- 300 width + 20 padding
+			AnchorPoint = Vector2.new(1, 0), -- Anchor to top right
+			Parent = ScreenGui, -- Parent to the main ScreenGui created in this function
+			ZIndex = 5 -- Ensure notifications are above other UI elements if needed
 		});
 
-		local ContentHeight = 0;
-		local Padding = 8; -- Inner padding
-
-		if (Title) then
-			local TitleLabel = utility:RenderObject("TextLabel", {
-				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-				BackgroundTransparency = 1,
-				BorderColor3 = Color3.fromRGB(0, 0, 0),
-				BorderSizePixel = 0,
-				Position = UDim2.new(0, Padding, 0, Padding),
-				Size = UDim2.new(1, -Padding * 2, 0, 14), -- Fixed height for title
-				ZIndex = 7,
-				Font = "Code", -- Use library font
-				RichText = true,
-				Text = "<b>" .. Title .. "</b>", -- Bold title
-				TextColor3 = Color3.fromRGB(205, 205, 205), -- Use library text color
-				TextSize = 11, -- Use library text size
-				TextStrokeTransparency = 1,
-				TextXAlignment = "Left",
-				TextYAlignment = "Top",
-				Parent = InnerFrame
-			});
-			ContentHeight += 14 + Padding; -- Add title height and padding
+		do -- // Functions
+			function Window:SetPage(Page)
+				for index, page in pairs(Window.Pages) do
+					if page.Open and page ~= Page then
+						page:Set(false)
+					end
+				end
+			end
+			--
+			function Window:Fade(state)
+				for index, render in pairs(library.Renders) do
+					if not render[3] then
+						if render[1].ClassName == "Frame" and (render[2]["BackgroundTransparency"] or 0) ~= 1 then
+							tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {BackgroundTransparency = state and (render[2]["BackgroundTransparency"] or 0) or 1}):Play()
+						elseif render[1].ClassName == "ImageLabel" then
+							if (render[2]["BackgroundTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {BackgroundTransparency = state and (render[2]["BackgroundTransparency"] or 0) or 1}):Play()
+							end
+							--
+							if (render[2]["ImageTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {ImageTransparency = state and (render[2]["ImageTransparency"] or 0) or 1}):Play()
+							end
+						elseif render[1].ClassName == "TextLabel" then
+							if (render[2]["BackgroundTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {BackgroundTransparency = state and (render[2]["BackgroundTransparency"] or 0) or 1}):Play()
+							end
+							--
+							if (render[2]["TextTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {TextTransparency = state and (render[2]["TextTransparency"] or 0) or 1}):Play()
+							end
+						elseif render[1].ClassName == "ScrollingFrame" then
+							if (render[2]["BackgroundTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {BackgroundTransparency = state and (render[2]["BackgroundTransparency"] or 0) or 1}):Play()
+							end
+							--
+							if (render[2]["ScrollBarImageTransparency"] or 0) ~= 1 then
+								tws:Create(render[1], TweenInfo.new(render[4] or 0.25, Enum.EasingStyle["Linear"], state and Enum.EasingDirection["Out"] or Enum.EasingDirection["In"]), {ScrollBarImageTransparency = state and (render[2]["ScrollBarImageTransparency"] or 0) or 1}):Play()
+							end
+						end
+					end
+				--
+				function Window:Unload()
+					ScreenGui:Remove()
+					--
+					for index, connection in pairs(library.Connections) do
+						connection:Disconnect()
+					end
+					--
+					library = nil
+					utility = nil
+				end
+			end
+		--
+		do -- // Index Setting
+			Window["TabsHolder"] = InnerBorder_InnerFrame_Tabs
+			Window["PagesHolder"] = InnerBorder_InnerFrame_Folder
+			end
+		--
+		do -- // Connections
+			utility:CreateConnection(uis.InputBegan, function(Input)
+				if Input.KeyCode and Input.KeyCode == Window.Key then
+					Window.Enabled = not Window.Enabled
+					--
+					Window:Fade(Window.Enabled)
+				elseif Input.KeyCode and Input.KeyCode == Enum.KeyCode.X then
+					Window:Unload()
+				end
+			end)
+			end
 		end
 
-		if (Description) then
-			-- Calculate description height based on text size and wrapping
-			local TextSize = ts:GetTextSize(Description, 9, Enum.Font.Code, Vector2.new(Width - Padding * 2, 0));
-			local DescriptionHeight = TextSize.Y;
-
-			local DescriptionLabel = utility:RenderObject("TextLabel", {
-				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-				BackgroundTransparency = 1,
-				BorderColor3 = Color3.fromRGB(0, 0, 0),
-				BorderSizePixel = 0,
-				Position = UDim2.new(0, Padding, 0, ContentHeight), -- Position below title if exists
-				Size = UDim2.new(1, -Padding * 2, 0, DescriptionHeight), -- Dynamic height
-				ZIndex = 7,
-				Font = "Code", -- Use library font
-				RichText = true,
-				Text = Description,
-				TextColor3 = Color3.fromRGB(155, 155, 155), -- Slightly darker text color
-				TextSize = 9, -- Use library text size
-				TextStrokeTransparency = 1,
-				TextXAlignment = "Left",
-				TextYAlignment = "Top",
-				TextWrapped = true, -- Enable text wrapping
-				Parent = InnerFrame
-			});
-			ContentHeight += DescriptionHeight + Padding; -- Add description height and padding
-		end
-
-		-- Adjust the size of the main frame based on content
-		NewLabel.Size = UDim2.new(0, Width, 0, ContentHeight + Padding); -- Add bottom padding
-
-		-- Add the notification to the container (will be set up in CreateWindow)
-		-- This ensures NotificationsContainer exists before parenting
-		if NotificationContainer then
-			NewLabel.Parent = NotificationContainer;
-			-- Add to the instruction list for animation
-			table.insert(InstructionObjects, {NewLabel, 0, false});
-			-- Start the fade out coroutine
-			coroutine.wrap(FadeOutAfter)(NewLabel, Duration);
-		else
-			warn("NotificationContainer is not initialized. Call CreateWindow first.")
-			NewLabel:Destroy() -- Clean up if container not ready
-		end
-	end
-end
-
--- Override CreateWindow to create the notification container
-local originalCreateWindow = library.CreateWindow
-function library:CreateWindow(Properties)
-	-- Call the original CreateWindow to set up the main window
-	local window = originalCreateWindow(library, Properties)
-
-	-- Create the NotificationContainer and parent it to the main window's ScreenGui
-	NotificationContainer = utility:RenderObject("Frame", {
-		Name = "NotificationsContainer",
-		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 300, 1, 0), -- Example size, can adjust
-		-- Position in the top right corner, slightly offset
-		Position = UDim2.new(1, -320, 0, 20), -- 300 width + 20 padding
-		AnchorPoint = Vector2.new(1, 0), -- Anchor to top right
-		Parent = window[1], -- Parent to the main ScreenGui created in original CreateWindow
-		ZIndex = 5 -- Ensure notifications are above other UI elements if needed
-	});
-
-	-- We don't need to return the container, just make sure it's created when the window is
-
-	return window -- Return the main window object
+	-- Return the main window object with metatable
+	return setmetatable(Window, library)
 end
 
 --
