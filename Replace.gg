@@ -2421,7 +2421,7 @@ local function UpdateNotifications()
 		local TargetPosY = PreviousBoundsY + (NotificationPadding * #PreviousObjects);
 		-- Animate X position from outside to inside the container
 		local TargetPosX = 0;
-		local AnimatedPosX = -NewLabel.Size.X.Offset * (1 - NewValue); -- Animate from left outside
+		local AnimatedPosX = -Label.Size.X.Offset * (1 - NewValue); -- Animate from left outside, Corrected NewLabel to Label
 
 		Label.Position = UDim2.new(0, AnimatedPosX, 0, TargetPosY); -- Update position
 
@@ -2485,37 +2485,132 @@ local function FadeOutAfter(Object, Seconds)
 	end
 end
 
-
-function library:Notify(Properties)
-	local Properties = typeof(Properties) == "table" and Properties or {};
-	local Title = Properties.Title;
-	local Description = Properties.Description;
-	local Duration = Properties.Duration or 5;
-	local Width = Properties.Width or 300; -- Allow specifying width
-
-	if (Title) or (Description) then -- Check that user has provided title and/or description
-
-		-- Create main notification frame (outline style)
-		local NewLabel = utility:RenderObject("Frame", {
-			BackgroundColor3 = Color3.fromRGB(40, 40, 40), -- Similar to section background
+-- Combined CreateWindow function
+function library:CreateWindow(Properties)
+	Properties = Properties or {}
+	--
+	local Window = {
+		Pages = {},
+		Accent = Color3.fromRGB(255, 120, 30), -- Color3.fromRGB(136, 180, 57) -- Change if wanted
+		Enabled = true,
+		Key = Enum.KeyCode.Z -- Change if wanted
+	}
+	--
+	do
+		local ScreenGui = utility:RenderObject("ScreenGui", {
+			DisplayOrder = 9999,
+			Enabled = true,
+			IgnoreGuiInset = true,
+			Parent = cre,
+			ResetOnSpawn = false,
+			ZIndexBehavior = "Global"
+		})
+		-- //
+		local ScreenGui_MainFrame = utility:RenderObject("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = Color3.fromRGB(25, 25, 25),
 			BackgroundTransparency = 0,
-			BorderColor3 = Color3.fromRGB(12, 12, 12), -- Similar to section border
+			BorderColor3 = Color3.fromRGB(12, 12, 12),
 			BorderMode = "Inset",
 			BorderSizePixel = 1,
-			Size = UDim2.new(0, Width, 0, 0), -- Initial height will be calculated
-			Position = UDim2.new(0, -Width, 0, 0), -- Start off-screen to the left
-			ZIndex = 5, -- Ensure it's above main UI but below popups
-			-- Parent = NotificationContainer, -- Will be parented later in CreateWindow
-			ClipsDescendants = true -- Clip content outside bounds
-		});
-
-		-- Add inner frame (darker background)
-		local InnerFrame = utility:RenderObject("Frame", {
-			BackgroundColor3 = Color3.fromRGB(23, 23, 23), -- Similar to section inner background
+			Parent = ScreenGui,
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			Size = UDim2.new(0, 660, 0, 560)
+		})
+		-- //
+		local ScreenGui_MainFrame_InnerBorder = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(40, 40, 40),
 			BackgroundTransparency = 0,
 			BorderColor3 = Color3.fromRGB(0, 0, 0),
 			BorderSizePixel = 0,
+			Parent = ScreenGui_MainFrame,
 			Position = UDim2.new(0, 1, 0, 1),
+			Size = UDim2.new(1, -2, 1, -2)
+		})
+		-- //
+		local MainFrame_InnerBorder_InnerFrame = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(60, 60, 60),
+			BorderMode = "Inset",
+			BorderSizePixel = 1,
+			Parent = ScreenGui_MainFrame,
+			Position = UDim2.new(0, 3, 0, 3),
+			Size = UDim2.new(1, -6, 1, -6)
+		})
+		-- //
+		local InnerBorder_InnerFrame_Tabs = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = MainFrame_InnerBorder_InnerFrame,
+			Position = UDim2.new(0, 0, 0, 4),
+			Size = UDim2.new(0, 74, 1, -4)
+		})
+		--
+		local InnerBorder_InnerFrame_Pages = utility:RenderObject("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = MainFrame_InnerBorder_InnerFrame,
+			Position = UDim2.new(1, 0, 0, 4),
+			Size = UDim2.new(1, -73, 1, -4)
+		})
+		--
+		local InnerBorder_InnerFrame_TopGradient = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = MainFrame_InnerBorder_InnerFrame,
+			Position = UDim2.new(0, 0, 0, 0),
+			Size = UDim2.new(1, 0, 0, 4)
+		})
+		-- //
+		local InnerFrame_Tabs_List = utility:RenderObject("UIListLayout", {
+			Padding = UDim.new(0, 4),
+			Parent = InnerBorder_InnerFrame_Tabs,
+			FillDirection = "Vertical",
+			HorizontalAlignment = "Left",
+			VerticalAlignment = "Top"
+		})
+		--
+		local InnerFrame_Tabs_Padding = utility:RenderObject("UIPadding", {
+			Parent = InnerBorder_InnerFrame_Tabs,
+			PaddingTop = UDim.new(0, 9)
+		})
+		--
+		local InnerFrame_Pages_InnerBorder = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(45, 45, 45),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = InnerBorder_InnerFrame_Pages,
+			Position = UDim2.new(0, 1, 0, 0),
+			Size = UDim2.new(1, -1, 1, 0)
+		})
+		--
+		local InnerFrame_TopGradient_Gradient = utility:RenderObject("ImageLabel", {
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 1,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = InnerBorder_InnerFrame_TopGradient,
+			Position = UDim2.new(0, 1, 0, 1),
+			Size = UDim2.new(1, -2, 1, -2),
+			Image = "rbxassetid://8508019876",
+			ImageColor3 = Color3.fromRGB(255, 255, 255)
+		})
+		-- //
+		local Pages_InnerBorder_InnerFrame = utility:RenderObject("Frame", {
+			BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+			BackgroundTransparency = 0,
+			BorderColor3 = Color3.fromRGB(0, 0, 0),
+			BorderSizePixel = 0,
+			Parent = InnerFrame_Pages_InnerBorder,
 			Size = UDim2.new(1, -2, 1, -2),
 			Parent = NewLabel,
 			ZIndex = 6
