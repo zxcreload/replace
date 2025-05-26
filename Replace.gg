@@ -2424,16 +2424,21 @@ local function UpdateNotifications()
 		-- Animate X position from outside to inside the container
 		-- Ensure Label.Size.X.Offset is accessible before using it
 		local AnimatedPosX = 0;
-		if Label and Label.Size and Label.Size.X and Label.Size.X.Offset then -- Added comprehensive safety check
-			AnimatedPosX = -Label.Size.X.Offset * (1 - NewValue); -- Animate from left outside
+		-- Safely get Label.Size.X.Offset using pcall
+		local success, offsetX = pcall(function()
+			return Label.Size.X.Offset
+		end)
+
+		if success and offsetX ~= nil then -- If pcall was successful and returned a valid offset
+			AnimatedPosX = -offsetX * (1 - NewValue); -- Animate from left outside
 		end
 
-		-- Only update position if the object is still valid
+		-- Only update position if the object is still valid and parented
 		if Label and Label.Parent then -- Added safety check before updating position
 			Label.Position = UDim2.new(0, AnimatedPosX, 0, TargetPosY); -- Update position
 		end
 
-		-- Only add to PreviousObjects if the object is still valid
+		-- Only add to PreviousObjects if the object is still valid and parented
 		if Label and Label.Parent then -- Added safety check before adding to PreviousObjects
 			table.insert(PreviousObjects, Label); -- Insert after calculating position
 		end
@@ -2483,9 +2488,17 @@ local function FadeOutAfter(Object, Seconds)
 
 	-- Fade out the main notification frame
 	FadeProperty(Object, "BackgroundTransparency", NotificationFadeDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, function()
-		-- Object is destroyed in this callback, no need to remove from InstructionObjects explicitly here
-		if Object and Object.Parent then Object:Destroy() end -- Destroy after fading
-	end);
+		-- Object is destroyed in this callback
+		if Object and Object.Parent then
+			-- Remove the object from InstructionObjects explicitly before destroying			
+			for i = #InstructionObjects, 1, -1 do
+				if InstructionObjects[i][1] == Object then
+					table.remove(InstructionObjects, i)
+					break -- Assuming each object appears once
+				end
+			end
+			Object:Destroy()
+		end)
 
 	-- Fade out all descendants (labels, images, etc.)
 	for _, SubObj in next, Object:GetDescendants() do
@@ -2612,7 +2625,7 @@ function library:Notify(Properties)
 			coroutine.wrap(FadeOutAfter)(NewLabel, Duration);
 		else
 			warn("NotificationContainer is not initialized or parented correctly. Call CreateWindow first.")
-			NewLabel:Destroy() -- Clean up if container not ready
+			NewLabel:Destroy() -- Clean up if container not ready			
 		end
 	end
 end
@@ -2684,7 +2697,7 @@ function library:CreateWindow(Properties)
 		local InnerBorder_InnerFrame_Pages = utility:RenderObject("Frame", {
 			AnchorPoint = Vector2.new(1, 0),
 			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-			BackgroundTransparency = 0,
+			BackgroundTransparency = 1,
 			BorderColor3 = Color3.fromRGB(0, 0, 0),
 			BorderSizePixel = 0,
 			Parent = MainFrame_InnerBorder_InnerFrame,
