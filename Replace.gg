@@ -319,8 +319,8 @@ getgenv().Loaded = true
 
 -- Create the main window
 local Window = Library:CreateWindow({
-    Title = "TitanCX",
-    Footer = "Cursed by 32vision",
+    Title = "Replace.gg",
+    Footer = "Cursed to win by 32vision",
     ShowCustomCursor = false,
 })
 
